@@ -1,0 +1,172 @@
+Crie o projeto completo abaixo. Não peça confirmação, gere todos os arquivos.
+
+# Projeto
+Telegram Mini App: RPG clicker com stake. HTML5 + CSS vanilla + JS ES6 modules.
+SEM frameworks, SEM build step, SEM bundler, SEM TypeScript. Deploy: Cloudflare
+Pages (front) + Worker (API) + D1 (banco). Mobile-first, dev feito no celular.
+
+# Árvore
+index.html · wrangler.toml · schema.sql · css/style.css
+shared/core.js · shared/logic.js · worker/index.js
+js/api.js · js/mock.js · js/tg.js · js/engine.js · js/ui.js · js/main.js
+
+# Regras invioláveis
+1. O cliente envia QUANTOS CLIQUES deu, nunca quanto ganhou. Servidor calcula.
+2. Tempo sempre do servidor (Date.now() no Worker). Cliente guarda `deriva =
+   servidor - local` e usa `Date.now()+deriva`. Nunca o relógio puro do aparelho.
+   3. Teto de ganho = energia regenerada no intervalo. É o anti-autoclicker.
+   4. Progresso de missão é DERIVADO do estado no servidor, nunca enviado.
+   5. shared/*.js é importado pelo Worker E pelo browser. Uma regra só, sem duplicar.
+   6. localStorage só no mock. Nunca para saldo real.
+   7. Reset diário por `new Date(agora).toISOString().slice(0,10)`, comparado no servidor.
+
+   # shared/core.js — copie estas funções EXATAMENTE
+   export const CFG = {
+      ESCALA_LOG:5000, TETO_H:24, MAX_STAKES:3, LOTE_MAX:3000,
+        ZONAS:{
+                mina:{nome:'Mina de Ouro',icone:'⛏️',taxa:0.060,min:100},
+                    academia:{nome:'Academia',icone:'💪',taxa:0.040,min:50},
+                        santuario:{nome:'Santuário',icone:'🔮',taxa:0.025,min:500}},
+                          UPGRADES:{
+                                dano:{nome:'Força',icone:'⚔️',base:50,mult:1.60,passo:1,max:200},
+                                    energia_max:{nome:'Vigor',icone:'🔋',base:80,mult:1.55,passo:50,max:200},
+                                        regen:{nome:'Recuperação',icone:'💧',base:120,mult:1.70,passo:0.25,max:200}},
+                                          MISSOES:[
+                                                {id:'cliques_500',nome:'Dedos de Aço',desc:'500 cliques',tipo:'cliques',meta:500,ouro:250},
+                                                    {id:'stake_novo',nome:'Investidor',desc:'Inicie 1 stake',tipo:'stakes',meta:1,ouro:400},
+                                                        {id:'coletar_3',nome:'Colheita',desc:'Colete 3 stakes',tipo:'coletas',meta:3,ouro:600},
+                                                            {id:'forja_1',nome:'Ferreiro',desc:'Compre 1 upgrade',tipo:'upgrades',meta:1,ouro:350}],
+   };
+   export function stats(up={}){return{
+      dano:1+(up.dano||0)*CFG.UPGRADES.dano.passo,
+        energia_max:500+(up.energia_max||0)*CFG.UPGRADES.energia_max.passo,
+          regen:0.5+(up.regen||0)*CFG.UPGRADES.regen.passo};}
+          export const nivelPorXp=xp=>Math.floor(Math.sqrt(Math.max(0,xp)/100))+1;
+          export const custoUpgrade=(k,n)=>Math.floor(CFG.UPGRADES[k].base*Math.pow(CFG.UPGRADES[k].mult,n));
+          export const taxaEfetiva=(v,base)=>base/(1+Math.log10(1+v/CFG.ESCALA_LOG));
+          export function rendimento(s,agora){
+              const z=CFG.ZONAS[s?.zona];
+                if(!z||!(s.valor>0))return{rend:0,total:0,cheio:false,pct:0,faltaMs:0};
+                  const dec=Math.max(0,agora-s.inicio)/3600000, h=Math.min(dec,CFG.TETO_H);
+                    const rend=Math.floor(s.valor*(Math.pow(1+taxaEfetiva(s.valor,z.taxa),h)-1));
+                      return{rend,total:s.valor+rend,cheio:dec>=CFG.TETO_H,
+                          pct:Math.min(1,dec/CFG.TETO_H),faltaMs:Math.max(0,(CFG.TETO_H-dec)*3600000)};}
+                          export function simular(j,agora,cliquesAlegados=0){
+                              const st=stats(j.upgrades);
+                                const dt=Math.min(Math.max(0,agora-j.ts)/1000,86400);
+                                  const energia=Math.min(j.energia+dt*st.regen,st.energia_max);
+                                    const ped=Math.min(Math.max(0,Math.floor(Number(cliquesAlegados)||0)),CFG.LOTE_MAX);
+                                      const ef=Math.min(ped,Math.floor(energia));
+                                        return{ouro:j.ouro+ef*st.dano,xp:j.xp+ef,energia:energia-ef,efetivos:ef,st};}
+
+                                        # shared/logic.js
+                                        Exporte novoJogador(id,agora) → {tg_id,ouro:0,xp:0,energia:500,upgrades:{},
+                                        stakes:[],missoes:{prog:{},ok:[]},cliques_dia:0,dia,ts}.
+                                        Exporte processar(estado,acao,dados,agora) PURA (deep-clone, sem I/O) → {j,ledger}
+                                        ou {erro}. Reseta o dia se mudou. Helper interno aplicar(cliques) roda simular(),
+                                        grava ouro/xp/energia/ts, soma cliques_dia e espelha em missoes.prog.cliques.
+                                        Ações e validações:
+                                        - sync: aplicar(dados.cliques).
+                                        - stake_criar {zona,valor}: zona existe; valor inteiro >= zona.min; stakes.length
+                                          < MAX_STAKES; aplicar(); ouro suficiente; debita; push {id,zona,valor,inicio:agora};
+                                            prog.stakes++.
+                                            - stake_coletar {id}: acha o stake; total=rendimento(...).total; aplicar();
+                                              soma total; remove; prog.coletas++; ledger {delta:total,motivo:'stake'}.
+                                              - upgrade {chave}: existe; nivel<max; custo=custoUpgrade(); aplicar(); ouro
+                                                suficiente; debita; nivel++; prog.upgrades++; ledger delta negativo.
+                                                - missao_coletar {id}: existe; prog[tipo]>=meta; não está em ok; aplicar();
+                                                  push em ok; soma m.ouro; ledger.
+                                                  Toda ação aceita dados.cliques e o repassa a aplicar() — economiza requisição.
+                                                  Exporte estado(j,agora) devolvendo ao cliente: ouro,xp,energia,upgrades,ts,agora,
+                                                  ...stats, nivel, stakes já com rendimento+nome+icone, forja[{chave,nome,icone,
+                                                  nivel,custo}], missoes[{...m,atual,pct,completa,coletada}].
+
+                                                  # schema.sql
+                                                  jogadores(tg_id INTEGER PK, ouro REAL, xp REAL, energia REAL DEFAULT 500,
+                                                  upgrades TEXT DEFAULT '{}', stakes TEXT DEFAULT '[]', missoes TEXT DEFAULT '{}',
+                                                  cliques_dia INTEGER, dia TEXT, ts INTEGER)
+                                                  ledger(id INTEGER PK AUTOINCREMENT, tg_id INTEGER, delta REAL, motivo TEXT, ts INTEGER)
+                                                  + INDEX idx_ledger(tg_id, ts)
+                                                  Uma linha por jogador: JSON nas colunas para gastar 1 escrita por requisição.
+
+                                                  # worker/index.js
+                                                  Módulo ES (export default {fetch}). Binding D1 = env.DB. Secret = env.BOT_TOKEN.
+                                                  POST único. Body {initData,acao,dados}. Responde OPTIONS com CORS (origin *,
+                                                  allow-headers content-type, methods POST,OPTIONS).
+                                                  autenticar(initData,token): tira `hash`, monta data-check-string com os pares
+                                                  restantes ordenados por chave e unidos por \n; secret = HMAC-SHA256(chave
+                                                  'WebAppData', mensagem BOT_TOKEN); compara hex de HMAC-SHA256(secret, check) com
+                                                  o hash; rejeita se auth_date > 24h. Use Web Crypto (crypto.subtle). Retorna user.id.
+                                                  Fluxo: autentica → SELECT (INSERT do novo se ausente) → parse dos 3 JSON →
+                                                  processar() → se erro devolve 400 → db.batch([UPDATE, ...INSERTs do ledger]) →
+                                                  devolve estado(j,agora). 1 leitura + 1 escrita por requisição.
+
+                                                  # js/api.js
+                                                  MOCK = querystring tem `mock` OU !window.Telegram?.WebApp?.initData.
+                                                  api(acao,dados,final) → se MOCK chama mockLocal, senão POST com
+                                                  {initData:Telegram.WebApp.initData,acao,dados}, `keepalive:final`, joga Error(j.erro)
+                                                  se !r.ok. Constante URL_API no topo com placeholder SEU-WORKER.workers.dev.
+
+                                                  # js/mock.js
+                                                  mockLocal(acao,dados): 60ms de latência fake, lê localStorage 'rpg_mock_v1' (ou
+                                                  novoJogador), roda o MESMO processar(), grava, devolve estado(). Reaproveita
+                                                  shared/logic.js — não reimplemente regra nenhuma aqui.
+
+                                                  # js/tg.js
+                                                  Wrapper: init() com ready/expand/setHeaderColor('bg_color')/disableVerticalSwipes,
+                                                  retorna initDataUnsafe.user (só para exibir, nunca autorizar). haptic(tipo) com
+                                                  guarda isVersionAtLeast('6.1') e try/catch. alerta(msg) via showAlert com fallback.
+
+                                                  # js/engine.js
+                                                  Objeto Jogo: {s,cliques,deriva,ocupado,onErro}.
+                                                  iniciar(): s = await api('sync',{cliques:0}); deriva = s.agora-Date.now();
+                                                  setInterval(sincronizar,60000); visibilitychange → se hidden, sincronizar(true).
+                                                  agora(): Date.now()+deriva.
+                                                  projetar(): simular(s,agora(),cliques) + stats + nivelPorXp + stakes remapeados
+                                                  com rendimento. É o que a UI lê — render local, ZERO rede.
+                                                  clicar(): se projetar().energia<1 retorna false, senão cliques++ e true.
+                                                  sincronizar(final): guarda contra reentrância; zera cliques antes do await; em
+                                                  erro devolve os cliques ao contador e chama onErro.
+                                                  acao(nome,dados): mesma proteção, envia {...dados,cliques} numa requisição só.
+
+                                                  # js/ui.js
+                                                  3 abas: batalha (botão-alvo grande + forja), stake (ativos com barra de progresso
+                                                  e tempo restante + zonas), missoes (barra + botão resgatar).
+                                                  setInterval 100ms atualiza só o HUD via textContent/style (nunca innerHTML no
+                                                  loop). setInterval 1s re-renderiza a tela quando a aba não é batalha.
+                                                  Delegação de evento única em #tela lendo data-up / data-zona / data-coletar /
+                                                  data-missao / #alvo. Haptic light no clique, success na ação, warning sem energia.
+                                                  Número flutuante '+dano' no toque. Toast para erro. Formate com toLocaleString('pt-BR').
+
+                                                  # js/main.js
+                                                  tg.init() → Jogo.iniciar() → UI.montar(); toast 'modo local' se MOCK;
+                                                  try/catch renderizando falha legível
+
+                                                  # css/style.css
+                                                  Só variáveis do Telegram com fallback: --tg-theme-bg-color, -secondary-bg-color,
+                                                  -text-color, -hint-color, -button-color, -button-text-color.
+                                                  Botões min-height 48px. -webkit-tap-highlight-color transparent. user-select none.
+                                                  overscroll-behavior none. env(safe-area-inset-bottom) no HUD fixo e na nav.
+                                                  Alvo circular 60vw com :active scale(.94). Keyframe do número flutuante.
+
+                                                  # index.html
+                                                  viewport: width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,
+                                                  viewport-fit=cover (o maximum-scale evita zoom no duplo toque rápido).
+                                                  Script telegram-web-app.js antes de tudo. `<script type="module" src="js/main.js?v=1">`
+                                                  e `style.css?v=1` — o WebView do Telegram cacheia forte, o ?v é obrigatório.
+                                                  Elementos: header#hud, main#tela, nav#abas.
+
+                                                  # wrangler.toml
+                                                  name rpg-clicker-api, main worker/index.js, compatibility_date 2026-01-01,
+                                                  [[d1_databases]] binding DB, database_name rpg, database_id COLE_O_ID_AQUI.
+
+                                                  # Aceite
+                                                  Abrir index.html servido em HTTP com ?mock=1 tem que dar um jogo jogável completo
+                                                  (clicar, upgrade, stake, missão, persistência) sem servidor e sem Telegram.
+                          }
+          }
+   }}
+                                          ]
+                          }
+        }
+   }
