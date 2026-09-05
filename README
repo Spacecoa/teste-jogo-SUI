@@ -1,2 +1,87 @@
-.
+# RPG Clicker — Telegram Mini App
 
+Mini App mobile-first em HTML5, CSS vanilla e módulos ES6. O front-end pode ser servido pelo Cloudflare Pages e a API roda em Cloudflare Workers com D1. O modo `?mock=1` permite jogar sem Telegram, sem Worker e sem banco; o progresso local fica no `localStorage` apenas nesse modo.
+
+## Validação local
+
+```bash
+python3 -m http.server 8080
+```
+
+Abra `http://localhost:8080/?mock=1`. Clique no alvo, percorra as abas **Batalha**, **Stakes** e **Missões**, compre um upgrade quando houver ouro, crie um stake e confirme que recarregar a página preserva o progresso. O teste automatizado das regras pode ser executado com:
+
+```bash
+node test.mjs
+```
+
+## Deploy da API e do D1
+
+Instale e autentique o Wrangler:
+
+```bash
+npm install -g wrangler
+wrangler login
+```
+
+Dentro deste diretório, crie o banco e copie o `database_id` retornado para `wrangler.toml` no lugar de `COLE_O_ID_AQUI`:
+
+```bash
+wrangler d1 create rpg
+wrangler d1 execute rpg --remote --file=schema.sql
+wrangler secret put BOT_TOKEN
+wrangler deploy
+```
+
+Quando o comando solicitar o segredo, cole o token obtido com o BotFather. Não coloque o token em arquivos, no Git ou no front-end. Copie a URL HTTPS do Worker, por exemplo `https://rpg-clicker-api.<sua-conta>.workers.dev`, para `URL_API` em `js/api.js`.
+
+Depois de atualizar `URL_API`, publique novamente o Worker:
+
+```bash
+wrangler deploy
+```
+
+## Publicação do front-end
+
+Crie um projeto no Cloudflare Pages apontando para este repositório. Como o projeto não usa build step, deixe o comando de build vazio e use `.` como diretório de saída. Alternativamente, publique pela CLI:
+
+```bash
+wrangler pages project create rpg-clicker
+wrangler pages deploy . --project-name rpg-clicker
+```
+
+Guarde a URL HTTPS do Pages, por exemplo `https://rpg-clicker.pages.dev`. O Mini App precisa ser servido por HTTPS.
+
+## Configuração do bot no Telegram
+
+1. Abra o Telegram, procure `@BotFather` e execute `/newbot`.
+2. Defina o nome e o username do bot e copie o token.
+3. Execute `/setmenubutton`, selecione o bot, escolha **Web App**, informe um texto como `Jogar` e cole a URL HTTPS do Cloudflare Pages. O botão de menu abre o Mini App.
+4. Para testar por link direto, use a forma `https://t.me/SEU_BOT/SEU_APP` quando o Mini App tiver sido criado/configurado no BotFather, ou abra pelo botão de menu do bot.
+
+O Worker valida `Telegram.WebApp.initData` com HMAC-SHA256 e rejeita dados falsificados ou com mais de 24 horas. `initDataUnsafe` é usado somente para exibir o nome do usuário.
+
+## Teste final no app Telegram
+
+1. Abra uma conversa privada com o bot e toque no botão **Jogar**.
+2. Confirme que a tela carrega sem a mensagem de modo local e que o nome do Telegram aparece no cabeçalho.
+3. Toque no alvo várias vezes; o ouro e a energia devem atualizar imediatamente.
+4. Aguarde ou force uma troca de aba para verificar a sincronização. O servidor é quem calcula cliques efetivos, ouro e energia.
+5. Vá a **Stakes**, crie um stake quando houver saldo e confirme a barra de progresso. Colete-o somente quando quiser encerrar o stake.
+6. Em **Batalha**, compre uma melhoria e confirme a alteração do dano, da energia máxima ou da regeneração.
+7. Em **Missões**, confira o progresso derivado do estado do servidor e resgate uma missão concluída.
+8. Feche e reabra o Mini App: o saldo deve vir do D1, não do `localStorage`.
+9. Abra a URL do Pages com `?mock=1` em um navegador comum para validar o modo local separado.
+
+## Diagnóstico rápido
+
+| Sintoma | Verificação |
+| --- | --- |
+| `initData inválido ou expirado` | Abra o Mini App novamente pelo Telegram; não reutilize uma carga antiga. |
+| `assinatura inválida` | Confirme que `BOT_TOKEN` no Worker pertence ao mesmo bot configurado no BotFather. |
+| Erro de CORS ou URL | Confirme `URL_API` em `js/api.js` e execute `wrangler deploy` após a alteração. |
+| Banco vazio ou erro D1 | Execute `wrangler d1 execute rpg --remote --file=schema.sql` e confirme o binding `DB`. |
+| Página antiga | Incremente `?v=1` em `index.html` para `?v=2` nos arquivos CSS/JS, pois o WebView do Telegram usa cache forte. |
+
+## Arquitetura de segurança
+
+O cliente envia apenas a quantidade de cliques acumulada. O Worker usa `Date.now()`, calcula energia regenerada, limita cliques efetivos à energia disponível, atualiza o saldo e grava o ledger. O progresso das missões é derivado no módulo compartilhado `shared/logic.js`, importado pelo Worker e pelo navegador. O relógio do cliente é corrigido pela deriva em relação ao horário devolvido pelo servidor.

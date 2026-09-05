@@ -1,0 +1,2 @@
+const w = () => window.Telegram?.WebApp;
+export const tg = { init() { const a = w(); if (!a) return null; a.ready(); a.expand(); a.setHeaderColor?.('bg_color'); a.disableVerticalSwipes?.(); return a.initDataUnsafe?.user || null; }, haptic(tipo = 'light') { try { const a = w(); if (a?.isVersionAtLeast?.('6.1')) a.HapticFeedback?.impactOccurred(tipo); } catch {} }, alerta(msg) { const a = w(); try { a?.showAlert ? a.showAlert(msg) : alert(msg); } catch { alert(msg); } } };

@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import { novoJogador, processar, estado } from './shared/logic.js';
+const t = Date.now();
+let j = novoJogador(1, t);
+let out = processar(j, 'sync', { cliques: 10 }, t);
+assert.equal(out.j.ouro, 10); assert.equal(out.j.missoes.prog.cliques, 10);
+out = processar(out.j, 'sync', { cliques: 50 }, t + 1000);
+assert.equal(out.j.ouro, 60);
+out = processar(out.j, 'upgrade', { chave: 'dano', cliques: 0 }, t + 1000);
+assert.equal(out.erro, undefined); assert.equal(out.j.ouro, 10);
+const semSaldo = out.j;
+out = processar(semSaldo, 'stake_criar', { zona: 'academia', valor: 50, cliques: 0 }, t + 1000);
+assert.equal(out.erro, 'Ouro insuficiente');
+out = processar({ ...semSaldo, ouro: 60 }, 'stake_criar', { zona: 'academia', valor: 50, cliques: 0 }, t + 1000);
+assert.equal(out.erro, undefined); assert.equal(out.j.stakes.length, 1); assert.equal(out.j.ouro, 10);
+const view = estado(out.j, t + 3600000); assert.equal(view.stakes[0].nome, 'Academia'); assert(view.stakes[0].total > 50);
+const nextDay = processar(out.j, 'sync', { cliques: 0 }, t + 86400001); assert.equal(nextDay.j.cliques_dia, 0);
+console.log('OK: regras de clique, teto, stake, upgrade, estado e reset diário');

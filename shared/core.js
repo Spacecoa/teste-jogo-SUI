@@ -1,0 +1,12 @@
+export const CFG = {
+  ESCALA_LOG: 5000, TETO_H: 24, MAX_STAKES: 3, LOTE_MAX: 3000,
+  ZONAS: { mina: { nome: 'Mina de Ouro', icone: '⛏️', taxa: 0.060, min: 100 }, academia: { nome: 'Academia', icone: '💪', taxa: 0.040, min: 50 }, santuario: { nome: 'Santuário', icone: '🔮', taxa: 0.025, min: 500 } },
+  UPGRADES: { dano: { nome: 'Força', icone: '⚔️', base: 50, mult: 1.60, passo: 1, max: 200 }, energia_max: { nome: 'Vigor', icone: '🔋', base: 80, mult: 1.55, passo: 50, max: 200 }, regen: { nome: 'Recuperação', icone: '💧', base: 120, mult: 1.70, passo: 0.25, max: 200 } },
+  MISSOES: [{ id: 'cliques_500', nome: 'Dedos de Aço', desc: '500 cliques', tipo: 'cliques', meta: 500, ouro: 250 }, { id: 'stake_novo', nome: 'Investidor', desc: 'Inicie 1 stake', tipo: 'stakes', meta: 1, ouro: 400 }, { id: 'coletar_3', nome: 'Colheita', desc: 'Colete 3 stakes', tipo: 'coletas', meta: 3, ouro: 600 }, { id: 'forja_1', nome: 'Ferreiro', desc: 'Compre 1 upgrade', tipo: 'upgrades', meta: 1, ouro: 350 }]
+};
+export function stats(up = {}) { return { dano: 1 + (up.dano || 0) * CFG.UPGRADES.dano.passo, energia_max: 500 + (up.energia_max || 0) * CFG.UPGRADES.energia_max.passo, regen: 0.5 + (up.regen || 0) * CFG.UPGRADES.regen.passo }; }
+export const nivelPorXp = xp => Math.floor(Math.sqrt(Math.max(0, xp) / 100)) + 1;
+export const custoUpgrade = (k, n) => Math.floor(CFG.UPGRADES[k].base * Math.pow(CFG.UPGRADES[k].mult, n));
+export const taxaEfetiva = (v, base) => base / (1 + Math.log10(1 + v / CFG.ESCALA_LOG));
+export function rendimento(s, agora) { const z = CFG.ZONAS[s?.zona]; if (!z || !(s.valor > 0)) return { rend: 0, total: 0, cheio: false, pct: 0, faltaMs: 0 }; const dec = Math.max(0, agora - s.inicio) / 3600000; const h = Math.min(dec, CFG.TETO_H); const rend = Math.floor(s.valor * (Math.pow(1 + taxaEfetiva(s.valor, z.taxa), h) - 1)); return { rend, total: s.valor + rend, cheio: dec >= CFG.TETO_H, pct: Math.min(1, dec / CFG.TETO_H), faltaMs: Math.max(0, (CFG.TETO_H - dec) * 3600000) }; }
+export function simular(j, agora, cliquesAlegados = 0) { const st = stats(j.upgrades); const dt = Math.min(Math.max(0, agora - j.ts) / 1000, 86400); const energia = Math.min(j.energia + dt * st.regen, st.energia_max); const ped = Math.min(Math.max(0, Math.floor(Number(cliquesAlegados) || 0)), CFG.LOTE_MAX); const ef = Math.min(ped, Math.floor(energia)); return { ouro: j.ouro + ef * st.dano, xp: j.xp + ef, energia: energia - ef, efetivos: ef, st }; }

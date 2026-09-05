@@ -1,0 +1,11 @@
+name = "rpg-clicker-api"
+main = "worker/index.js"
+compatibility_date = "2026-01-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "rpg"
+database_id = "COLE_O_ID_AQUI"
+
+[assets]
+directory = "."
